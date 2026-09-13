@@ -116,6 +116,50 @@ mispricing is worth.
 Trading both directions is materially worse (−2.51%, Sharpe −0.93), which is the
 asymmetry above showing up in P&L.
 
+### Holding it overnight is what costs the money
+
+A calendar is short gamma. The overnight version holds one for around four days,
+and every one of those nights is a gap in NIFTY that moves against the leg it
+sold before anything can be done about it. So the same signal was tested with the
+position closed before the bell: decide on the previous day's settlement prices,
+enter at the next session's open, exit at its close.
+
+| | Overnight, long only | **Intraday, long only** |
+|---|---|---|
+| Trades | 20 | 25 |
+| Win rate | 55% | **64%** |
+| Gross P&L | ₹2 | **₹15,428** |
+| Costs | ₹3,521 | ₹4,474 |
+| Net P&L | −₹3,519 | **+₹10,954** |
+| Return | −0.35% | **+1.10%** |
+| Sharpe | −0.21 | **0.66** |
+| Max drawdown | −1.09% | **−0.33%** |
+
+Removing the gaps removes the loss. The win rate moves from 55% to 64% on the
+same entry rule, which says the signal was being right about direction and then
+handing the gain back overnight.
+
+**This result rests on an assumption the data cannot support.** Bhavcopy gives one
+open and one close per contract, not a time-stamped book. Each leg's "open" is its
+own first trade of the session, and two contracts do not print their first trade
+at the same instant — so the entry debit used here is two fills at two unknown
+moments, not a spread anyone could have quoted.
+
+How much that matters is measurable. Charging up to ten ticks of slippage per leg
+barely dents it (+0.81%, Sharpe 0.49), because the gross move is large relative
+to the fees. The binding question is not fees but timing:
+
+| Share of the open-to-close move captured | Net P&L |
+|---|---|
+| 100% | +₹10,954 |
+| 50% | +₹3,240 |
+| **29%** | **breakeven** |
+| 25% | −₹617 |
+
+So the variant is worth taking seriously if — and only if — a real execution can
+capture roughly a third of the session's move in the spread. That is a question
+for minute data, not for this dataset.
+
 ### What was tried and did not help
 
 Capping the holding period at two, three and five days — motivated by the signal's
@@ -142,7 +186,8 @@ src/
     edge_study.py        does the signal predict anything, before P&L
     sensitivity.py       the same result across a parameter grid
   backtest/
-    engine.py            event loop, sizing, exits
+    engine.py            event loop, sizing, exits (overnight)
+    intraday.py          same signal, flat by the close
     costs.py             STT, exchange, SEBI, stamp, GST, slippage
     metrics.py           Sharpe, Sortino, drawdown, cost drag
 app.py                   Streamlit dashboard

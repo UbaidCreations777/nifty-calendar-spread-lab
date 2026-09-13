@@ -62,6 +62,12 @@ def build_day(raw_day: pd.DataFrame, expiry_kinds: pd.DataFrame) -> pd.DataFrame
     if opts.empty:
         return pd.DataFrame()
 
+    # The day's first and last traded prices, kept for the intraday variant.
+    # Unlike settlement these exist only where the contract actually traded, so
+    # they stay NaN rather than being filled with a stale number.
+    opts["open_px"] = opts["open"].where(opts["open"] > 0)
+    opts["close_px"] = opts["close"].where(opts["close"] > 0)
+
     opts["dte"] = _dte(opts["date"], opts["expiry"])
     opts = opts[opts["dte"] > 0]
     opts["T"] = opts["dte"] / 365.0
@@ -87,8 +93,8 @@ def build_day(raw_day: pd.DataFrame, expiry_kinds: pd.DataFrame) -> pd.DataFrame
     opts["lot_size"] = pd.to_numeric(opts["lot_size"], errors="coerce")
 
     cols = ["date", "expiry", "kind", "dte", "T", "strike", "option_type", "px",
-            "spot", "forward", "iv", "moneyness", "open_interest", "volume",
-            "lot_size", "tradeable"]
+            "open_px", "close_px", "spot", "forward", "iv", "moneyness",
+            "open_interest", "volume", "lot_size", "tradeable"]
     return opts[cols]
 
 
