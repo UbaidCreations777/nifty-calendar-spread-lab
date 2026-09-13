@@ -1,0 +1,14 @@
+# Market data is large and re-downloadable from NSE; the code that fetches it is
+# what belongs in the repo.
+data/raw/
+data/processed/
+*.holiday
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+.streamlit/secrets.toml
+.DS_Store
