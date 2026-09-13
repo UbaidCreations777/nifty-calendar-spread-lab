@@ -220,6 +220,7 @@ src/
     chain.py             raw bhavcopy -> forwards -> implied vols
     calendar.py          the daily ATM calendar spread series
     fair_value.py        the signal
+    diagonal.py          any two legs, priced on demand against their history
     edge_study.py        does the signal predict anything, before P&L
     sensitivity.py       the same result across a parameter grid
   backtest/

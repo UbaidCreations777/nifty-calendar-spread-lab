@@ -100,15 +100,24 @@ st.caption(
     "bucket — with the debit measured as a percentage of spot so a rising index "
     "does not read as a richer spread.")
 
-tab_today, tab_surface, tab_edge, tab_backtest, tab_robust = st.tabs(
-    ["Today's signal", "Volatility surface", "Does the signal work?",
-     "Backtest", "Robustness"])
+(tab_today, tab_diagonal, tab_surface, tab_edge, tab_backtest,
+ tab_robust) = st.tabs(
+    ["Today's signal", "Diagonals", "Volatility surface",
+     "Does the signal work?", "Backtest", "Robustness"])
 
 @st.cache_data(show_spinner="Building every expiry pair…")
 def load_all_pairs():
     """Each day's full grid of front/back combinations, for the explorer."""
     from src.pipeline import build_all_pairs
     return build_all_pairs()
+
+
+def _ordinal(n: float) -> str:
+    """1st, 2nd, 3rd, 4th — the teens all take 'th'."""
+    i = int(round(n))
+    suffix = "th" if 11 <= i % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(
+        i % 10, "th")
+    return f"{i}{suffix}"
 
 
 VERDICT_WORDS = {
@@ -127,7 +136,8 @@ def render_banner(row: dict):
     colour = {fv.BUY: BUY_COLOUR, fv.SELL: SELL_COLOUR}.get(signal, NEUTRAL)
 
     z = row.get("z_score")
-    detail = (f"z = {z:+.2f} &nbsp;·&nbsp; {row['percentile']:.0f}th percentile"
+    detail = (f"z = {z:+.2f} &nbsp;·&nbsp; "
+              f"{_ordinal(row['percentile'])} percentile"
               if z is not None and np.isfinite(z) else why)
 
     st.markdown(
@@ -303,6 +313,147 @@ with tab_today:
         fig.update_layout(height=320, yaxis_title="z-score vs comparable history",
                           margin=dict(t=20, b=8, l=8, r=8))
         st.plotly_chart(fig, use_container_width=True)
+
+# --------------------------------------------------------------- diagonal tab
+@st.cache_resource(show_spinner="Indexing the chain…")
+def diagonal_lookup():
+    from src.signal.diagonal import Lookup
+    near = chain[chain["dte"] <= C.BACK_DTE_MAX]
+    return Lookup(near)
+
+
+with tab_diagonal:
+    from src.signal import diagonal as dg
+
+    st.subheader("Price any two legs against their own history")
+    st.caption(
+        "A calendar is the case where both strikes are the same. Letting them "
+        "differ makes it a diagonal — and adds two dimensions to the state a "
+        "past day has to match on, so watch the match quality reported "
+        "underneath rather than only the z-score.")
+
+    lookup = diagonal_lookup()
+    as_of = max(lookup.dates)
+
+    expiries = lookup.expiries_by_day[as_of]
+    labels = {e: f"{e}  ({d}d)" for e, d in expiries}
+
+    c1, c2, c3 = st.columns(3)
+    opt = c1.selectbox("Option type", ["CE", "PE"], key="dg_opt")
+    front_exp = c2.selectbox("Sell — expiry", [e for e, _ in expiries],
+                             format_func=lambda e: labels[e], key="dg_fe")
+    back_choices = [e for e, _ in expiries if e > front_exp]
+    if not back_choices:
+        st.info("Pick an earlier front expiry — nothing is listed beyond this one.")
+    else:
+        back_exp = c3.selectbox("Buy — expiry", back_choices,
+                                format_func=lambda e: labels[e], key="dg_be")
+
+        f_slot = lookup.by_day_expiry.get((as_of, front_exp, opt))
+        b_slot = lookup.by_day_expiry.get((as_of, back_exp, opt))
+        if f_slot is None or b_slot is None:
+            st.info("No chain for one of those legs on this date.")
+        else:
+            spot = f_slot["spot"]
+            c4, c5 = st.columns(2)
+            f_strikes = [float(s) for s in f_slot["strike"]]
+            b_strikes = [float(s) for s in b_slot["strike"]]
+            f_default = int(np.argmin(np.abs(np.array(f_strikes) - spot)))
+            b_default = int(np.argmin(np.abs(np.array(b_strikes) - spot)))
+
+            front_strike = c4.selectbox(
+                "Sell — strike", f_strikes, index=f_default,
+                format_func=lambda s: f"{s:,.0f}  ({(s / spot - 1) * 100:+.1f}%)",
+                key="dg_fk")
+            back_strike = c5.selectbox(
+                "Buy — strike", b_strikes, index=b_default,
+                format_func=lambda s: f"{s:,.0f}  ({(s / spot - 1) * 100:+.1f}%)",
+                key="dg_bk")
+
+            verdict, past = dg.evaluate(
+                lookup, opt, as_of, front_exp, front_strike,
+                back_exp, back_strike,
+                z_entry=z_entry, min_comparables=min_n,
+                use_term_structure_filter=use_filter, max_distance=max_dist,
+                k=k_neighbours)
+
+            render_banner(verdict)
+
+            left, right = st.columns([1, 1.6])
+            with left:
+                st.markdown(
+                    f"**Sell** {front_exp} · {verdict['front_strike']:,.0f} {opt} "
+                    f"@ {verdict['front_px']:,.2f}  \n"
+                    f"**Buy** {back_exp} · {verdict['back_strike']:,.0f} {opt} "
+                    f"@ {verdict['back_px']:,.2f}  \n"
+                    f"Spot {spot:,.0f}")
+
+                m1, m2 = st.columns(2)
+                net = verdict["debit"]
+                m1.metric("Net debit" if net >= 0 else "Net credit",
+                          f"{abs(net):,.1f} pts",
+                          f"{verdict['debit_pct']:.3f}% of spot")
+
+                if verdict["signal"] == fv.INSUFFICIENT:
+                    m2.metric("Verdict", "No call",
+                              f"{int(verdict['n_comparables'])} comparables")
+                    st.info(
+                        "Too few comparable days for this combination. Every "
+                        "strike you move away from the money narrows the set — "
+                        "that is the cost of the extra dimensions, and the "
+                        "honest answer here is no signal.")
+                else:
+                    m2.metric("Fair value", f"{verdict['fv_mean_pct']:.3f}%",
+                              f"{verdict['cheapness_pct']:+.1f}% vs history")
+                    st.caption(
+                        f"Front IV {verdict['front_iv']:.1f} · back "
+                        f"{verdict['back_iv']:.1f} · term structure "
+                        f"{verdict['term_structure']:+.2f} vol points · "
+                        f"{int(verdict['n_comparables'])} comparable days, "
+                        f"average distance {verdict['match_distance']:.2f}")
+                    if verdict["match_distance"] > 1.5:
+                        st.warning(
+                            f"Match quality is loose — the comparable days sit "
+                            f"{verdict['match_distance']:.2f} units away on "
+                            "average, where one unit is about a day on the "
+                            "front leg or one strike. Treat the z-score as "
+                            "indicative rather than measured.")
+
+            with right:
+                if past.empty:
+                    st.info("No comparable history to plot.")
+                else:
+                    fig = px.histogram(
+                        past, x="debit_pct", nbins=15,
+                        title="What this structure cost on comparable days",
+                        labels={"debit_pct": "Debit (% of spot)"})
+                    fig.update_traces(marker_color="#c9ced6")
+                    fig.add_vline(
+                        x=verdict["debit_pct"],
+                        line_color=BUY_COLOUR if verdict["signal"] == fv.BUY
+                        else SELL_COLOUR, line_width=3,
+                        annotation_text="today")
+                    if np.isfinite(verdict.get("fv_mean_pct", np.nan)):
+                        fig.add_vline(x=verdict["fv_mean_pct"], line_dash="dash",
+                                      line_color="#8a8f98",
+                                      annotation_text="mean",
+                                      annotation_font_color="#8a8f98")
+                    fig.update_layout(height=340, showlegend=False,
+                                      margin=dict(t=48, b=8, l=8, r=8))
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.dataframe(
+                        past[["date", "front_dte", "back_dte", "front_strike",
+                              "back_strike", "debit", "debit_pct",
+                              "state_distance"]].round(4),
+                        hide_index=True, use_container_width=True, height=200)
+
+    st.info(
+        "**This is a lookup, not a strategy.** Nothing here is backtested: the "
+        "backtest covers one defined structure, and scanning every strike and "
+        "expiry for the most stretched reading would be choosing a winner from "
+        "a very large draw. Use it to price a structure you are already "
+        "considering.")
+
 
 # ---------------------------------------------------------------- surface tab
 with tab_surface:
