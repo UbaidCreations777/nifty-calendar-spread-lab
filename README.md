@@ -305,5 +305,27 @@ The data step downloads from NSE's public archive and caches each day to
 
 ---
 
+## Disclaimer
+
+This is a personal research project, published to show method. It is **not
+investment advice and not a research report**, and nothing in it is a
+recommendation to buy or sell any security.
+
+The "buy" and "sell" labels in the code and dashboard are the output of a
+statistical model being tested, not a view being offered to anyone. The headline
+finding is that the rule does **not** produce a tradeable edge after costs.
+
+It is not affiliated with, endorsed by, or produced on behalf of any employer,
+and it uses no proprietary or confidential information — only NSE's public
+bhavcopy archive and a publicly published minute-bar dataset. Any views are the
+author's own.
+
+Nothing here is backed by a SEBI research analyst or investment adviser
+registration. Past results, including the ones reported above, do not indicate
+future outcomes. Derivatives carry a risk of substantial loss. Anyone acting on
+this does so entirely at their own risk.
+
+---
+
 Built by [Ubaid Shaikh](https://www.linkedin.com/in/ubaidshaikhwork) — derivatives
 trader, proprietary desk. NISM Series VIII certified.

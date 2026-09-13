@@ -73,6 +73,13 @@ st.sidebar.caption(
     f"Costs modelled: STT {C.STT_SELL_PREMIUM:.2%} on sell premium, exchange "
     f"{C.EXCHANGE_TXN_PCT:.4%}, GST {C.GST_PCT:.0%}, "
     f"{C.SLIPPAGE_TICKS} ticks slippage per leg.")
+st.sidebar.markdown("---")
+st.sidebar.caption(
+    "**Not investment advice.** A personal research project. The buy and sell "
+    "labels are a model's output being tested, not a recommendation — and the "
+    "finding is that the rule does not clear its costs. No SEBI research "
+    "analyst or investment adviser registration. Derivatives can lose "
+    "substantial money.")
 
 data = load(method, k_neighbours, max_dist, iv_width, back_tol, min_n,
             z_entry, use_filter)
