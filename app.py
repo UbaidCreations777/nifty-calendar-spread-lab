@@ -29,8 +29,9 @@ NEUTRAL = "#8a8f98"
 
 @st.cache_data(show_spinner="Loading pipeline…")
 def load(method: str, k: int, max_dist: float, iv_width: float, back_tol: int,
-         min_n: int, z_entry: float, use_filter: bool):
-    return run_all(rebuild=False, save=False, method=method, k=k,
+         min_n: int, z_entry: float, use_filter: bool, allow_short: bool):
+    return run_all(rebuild=False, save=False, allow_short=allow_short,
+                   method=method, k=k,
                    max_distance=max_dist, iv_half_width=iv_width,
                    back_dte_tolerance=back_tol, min_comparables=min_n,
                    z_entry=z_entry, use_term_structure_filter=use_filter)
@@ -67,6 +68,11 @@ min_n = st.sidebar.slider("Minimum comparables", 3, 20,
                           int(C.MIN_COMPARABLES))
 z_entry = st.sidebar.slider("Entry |z|", 0.5, 3.0, float(C.Z_ENTRY), 0.25)
 use_filter = st.sidebar.checkbox("Term-structure confirmation", value=True)
+allow_short = st.sidebar.checkbox(
+    "Backtest the sell side too", value=C.ALLOW_SHORT,
+    help=("Sell signals are always shown. This decides whether the backtest "
+          "also trades them — off by default, because on this sample the sell "
+          "side was right about a third of the time."))
 
 st.sidebar.markdown("---")
 st.sidebar.caption(
@@ -82,7 +88,7 @@ st.sidebar.caption(
     "substantial money.")
 
 data = load(method, k_neighbours, max_dist, iv_width, back_tol, min_n,
-            z_entry, use_filter)
+            z_entry, use_filter, allow_short)
 signals, chain, trades, equity = (data["signals"], data["chain"],
                                   data["trades"], data["equity"])
 stats = metrics.summarise(equity, trades, C.INITIAL_CAPITAL)
@@ -105,8 +111,59 @@ def load_all_pairs():
     return build_all_pairs()
 
 
+VERDICT_WORDS = {
+    fv.BUY: ("BUY THE SPREAD", "trading below its own history — pay the debit"),
+    fv.SELL: ("SELL THE SPREAD", "trading above its own history — take the credit"),
+    fv.FLAT: ("NO TRADE", "inside its normal range"),
+    fv.INSUFFICIENT: ("NO CALL", "not enough comparable history"),
+}
+
+
+def render_banner(row: dict):
+    """The verdict, stated before anything else on the page."""
+    signal = row.get("signal", fv.INSUFFICIENT)
+    raw = row.get("raw_signal", signal)
+    word, why = VERDICT_WORDS[signal]
+    colour = {fv.BUY: BUY_COLOUR, fv.SELL: SELL_COLOUR}.get(signal, NEUTRAL)
+
+    z = row.get("z_score")
+    detail = (f"z = {z:+.2f} &nbsp;·&nbsp; {row['percentile']:.0f}th percentile"
+              if z is not None and np.isfinite(z) else why)
+
+    st.markdown(
+        f"<div style='padding:20px 24px;border-radius:10px;background:{colour};"
+        f"color:white;margin-bottom:14px'>"
+        f"<div style='font-size:2rem;font-weight:700;line-height:1.1'>{word}</div>"
+        f"<div style='font-size:1rem;opacity:.92;margin-top:6px'>{why}"
+        f" &nbsp;·&nbsp; {detail}</div></div>",
+        unsafe_allow_html=True)
+
+    # The term structure only ever vetoes. When it has, say so plainly rather
+    # than showing a bare "no trade" the reader cannot account for.
+    if raw != signal and raw in (fv.BUY, fv.SELL):
+        side = "cheap" if raw == fv.BUY else "rich"
+        wanted = "the near leg carrying more vol" if raw == fv.BUY \
+            else "the far leg carrying more vol"
+        st.info(
+            f"The z-score alone says **{raw.upper()}** — the spread is {side} "
+            f"against comparable days. The term-structure check overruled it: "
+            f"that trade wants {wanted}, and right now the curve is the other "
+            f"way round ({row['term_structure']:+.2f} vol points). Turn the "
+            "confirmation off in the sidebar to trade the raw reading.")
+
+    if fv.SELL in (signal, raw):
+        st.warning(
+            "**On the record, this side has been the weak one.** Measured over "
+            "the sample, spreads that looked rich went on to widen further "
+            "rather than narrow — the sell call was right about 29–35% of the "
+            "time against 67–70% for the buy call. A calendar's debit drifts "
+            "wider on its own as the front leg decays, so selling it fights "
+            "that drift. The backtest therefore trades the long side only.")
+
+
 def render_verdict(row: dict, source: pd.DataFrame, as_of):
     """One structure's card and its comparable-history chart."""
+    render_banner(row)
     left, right = st.columns([1, 1.6])
 
     with left:
@@ -131,15 +188,6 @@ def render_verdict(row: dict, source: pd.DataFrame, as_of):
         c2.metric("Fair value", f"{row['fv_mean_pct']:.3f}%",
                   f"{row['cheapness_pct']:+.1f}% vs history")
 
-        verdict = row["signal"].upper()
-        colour = {fv.BUY: BUY_COLOUR, fv.SELL: SELL_COLOUR}.get(
-            row["signal"], NEUTRAL)
-        st.markdown(
-            f"<div style='padding:12px;border-radius:8px;background:{colour};"
-            f"color:white;font-weight:600;font-size:1.1rem'>{verdict}"
-            f" &nbsp;·&nbsp; z = {row['z_score']:+.2f}"
-            f" &nbsp;·&nbsp; {row['percentile']:.0f}th percentile</div>",
-            unsafe_allow_html=True)
         st.caption(
             f"Front ATM IV {row['front_iv']:.1f} · back {row['back_iv']:.1f} "
             f"· term structure {row['term_structure']:+.2f} vol points · "

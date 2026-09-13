@@ -81,12 +81,13 @@ def build_signals(chain: pd.DataFrame, rebuild: bool = False,
     return spreads, signals
 
 
-def run_all(rebuild: bool = False, save: bool = True, **signal_kwargs) -> dict:
+def run_all(rebuild: bool = False, save: bool = True,
+            allow_short: bool = C.ALLOW_SHORT, **signal_kwargs) -> dict:
     chain = build_chain(rebuild)
     spreads, signals = build_signals(chain, rebuild, **signal_kwargs)
 
     print("running backtest...", flush=True)
-    result = engine.run(signals, chain)
+    result = engine.run(signals, chain, allow_short=allow_short)
     stats = metrics.summarise(result["equity"], result["trades"],
                               C.INITIAL_CAPITAL)
 

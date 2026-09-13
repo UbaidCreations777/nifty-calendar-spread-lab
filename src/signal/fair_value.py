@@ -88,8 +88,35 @@ def _weighted_stats(values: np.ndarray, weights: np.ndarray,
     }
 
 
+def _classify(z: float, z_entry: float) -> str:
+    """What the z-score alone says, before any confirmation."""
+    if z <= -z_entry:
+        return BUY                    # spread trades below its own history
+    if z >= z_entry:
+        return SELL                   # spread trades above its own history
+    return FLAT
+
+
+def _apply_filter(raw: str, term_structure: float, enabled: bool) -> str:
+    """Confirmation only, never a trigger.
+
+    A long calendar wants the leg it sells to carry more vol than the leg it
+    buys; when the term structure says the opposite, the cheapness is more likely
+    justified than mispriced. The reverse holds for a short. The unfiltered call
+    is kept alongside so the dashboard can show what was overruled and why.
+    """
+    if not enabled:
+        return raw
+    if raw == BUY and term_structure <= 0:
+        return FLAT
+    if raw == SELL and term_structure >= 0:
+        return FLAT
+    return raw
+
+
 def _blank(n: int) -> dict:
-    return {"n_comparables": n, "signal": INSUFFICIENT, "z_score": np.nan,
+    return {"n_comparables": n, "signal": INSUFFICIENT,
+            "raw_signal": INSUFFICIENT, "z_score": np.nan,
             "percentile": np.nan, "fv_mean_pct": np.nan, "fv_std_pct": np.nan,
             "fv_min_pct": np.nan, "fv_max_pct": np.nan,
             "cheapness_pct": np.nan, "match_distance": np.nan}
@@ -164,28 +191,16 @@ def evaluate(spreads: pd.DataFrame,
                     or stats["fv_std_pct"] / abs(stats["fv_mean_pct"])
                     < C.MIN_RELATIVE_DISPERSION):
                 out.append({**row, **stats, "signal": INSUFFICIENT,
-                            "z_score": np.nan})
+                            "raw_signal": INSUFFICIENT, "z_score": np.nan})
                 continue
 
-            z = stats["z_score"]
-            if z <= -z_entry:
-                signal = BUY          # spread trades below its own history
-            elif z >= z_entry:
-                signal = SELL         # spread trades above its own history
-            else:
-                signal = FLAT
+            raw = _classify(stats["z_score"], z_entry)
+            signal = _apply_filter(raw, row["term_structure"],
+                                   use_term_structure_filter)
+            out.append({**row, **stats, "signal": signal, "raw_signal": raw})
 
-            # Confirmation only. A long calendar wants the leg it sells to carry
-            # more vol than the leg it buys; when the term structure says the
-            # opposite, the cheapness is more likely to be justified than an edge.
-            if use_term_structure_filter and signal == BUY and row["term_structure"] <= 0:
-                signal = FLAT
-            if use_term_structure_filter and signal == SELL and row["term_structure"] >= 0:
-                signal = FLAT
-
-            out.append({**row, **stats, "signal": signal})
-
-    cols_first = ["date", "option_type", "signal", "z_score", "percentile",
+    cols_first = ["date", "option_type", "signal", "raw_signal", "z_score",
+                  "percentile",
                   "debit", "debit_pct", "fv_mean_pct", "n_comparables",
                   "match_distance"]
     df = pd.DataFrame(out).sort_values(["date", "option_type"]).reset_index(drop=True)
@@ -266,7 +281,8 @@ def evaluate_one(spreads: pd.DataFrame, option_type: str, as_of,
                    & (spreads["front_dte"] == front_dte)
                    & (spreads["back_dte"] == back_dte)]
     if book.empty:
-        return {"signal": INSUFFICIENT, "error": "no such pair on this date"}
+        return {"signal": INSUFFICIENT, "raw_signal": INSUFFICIENT,
+                "error": "no such pair on this date"}
 
     row = book.iloc[0].to_dict()
     comps = comparables(spreads, option_type, as_of, front_dte=front_dte,
@@ -284,16 +300,12 @@ def evaluate_one(spreads: pd.DataFrame, option_type: str, as_of,
             or abs(stats["fv_mean_pct"]) < 1e-12
             or stats["fv_std_pct"] / abs(stats["fv_mean_pct"])
             < C.MIN_RELATIVE_DISPERSION):
-        return {**row, **stats, "signal": INSUFFICIENT, "z_score": np.nan}
+        return {**row, **stats, "signal": INSUFFICIENT,
+                "raw_signal": INSUFFICIENT, "z_score": np.nan}
 
-    z = stats["z_score"]
-    signal = BUY if z <= -z_entry else SELL if z >= z_entry else FLAT
-    if use_term_structure_filter and signal == BUY and row["term_structure"] <= 0:
-        signal = FLAT
-    if use_term_structure_filter and signal == SELL and row["term_structure"] >= 0:
-        signal = FLAT
-
-    return {**row, **stats, "signal": signal}
+    raw = _classify(stats["z_score"], z_entry)
+    signal = _apply_filter(raw, row["term_structure"], use_term_structure_filter)
+    return {**row, **stats, "signal": signal, "raw_signal": raw}
 
 
 def latest_view(evaluated: pd.DataFrame) -> pd.DataFrame:

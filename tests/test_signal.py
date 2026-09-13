@@ -360,3 +360,48 @@ def test_evaluate_one_rejects_a_pair_that_does_not_exist():
     out = fv.evaluate_one(spreads, "CE", date(2024, 1, 1), front_dte=9,
                           back_dte=40)
     assert out["signal"] == fv.INSUFFICIENT
+
+
+# ----------------------------------------------------- the unfiltered verdict
+
+def test_raw_signal_records_what_the_z_score_alone_said():
+    """The filter only ever vetoes, so the dashboard needs the call it vetoed in
+    order to explain a 'no trade' the reader would otherwise not be able to
+    account for."""
+    debits = [97.0, 103.0, 99.0, 101.0, 96.0, 104.0, 98.0, 102.0, 70.0]
+    spreads = make_spreads(debits)
+    spreads["term_structure"] = -1.0         # does not support a long calendar
+
+    ev = fv.evaluate(spreads, min_comparables=8)
+    last = ev.iloc[-1]
+    assert last["raw_signal"] == fv.BUY      # cheap on the numbers
+    assert last["signal"] == fv.FLAT         # but stood down by the filter
+
+
+def test_sell_side_is_produced_not_suppressed():
+    """Selling a rich spread is a signal the model emits; only the backtest
+    declines to trade it."""
+    debits = [97.0, 103.0, 99.0, 101.0, 96.0, 104.0, 98.0, 102.0, 130.0]
+    spreads = make_spreads(debits)
+    spreads["term_structure"] = -1.0         # supports a short calendar
+    ev = fv.evaluate(spreads, min_comparables=8)
+    assert ev.iloc[-1]["raw_signal"] == fv.SELL
+    assert ev.iloc[-1]["signal"] == fv.SELL
+
+
+def test_raw_signal_equals_signal_when_the_filter_is_off():
+    debits = [97.0, 103.0, 99.0, 101.0, 96.0, 104.0, 98.0, 102.0, 70.0]
+    spreads = make_spreads(debits)
+    spreads["term_structure"] = -1.0
+    ev = fv.evaluate(spreads, min_comparables=8,
+                     use_term_structure_filter=False)
+    assert ev.iloc[-1]["signal"] == ev.iloc[-1]["raw_signal"] == fv.BUY
+
+
+def test_evaluate_one_also_reports_the_raw_signal():
+    debits = [97.0, 103.0, 99.0, 101.0, 96.0, 104.0, 98.0, 102.0, 130.0]
+    spreads = make_spreads(debits)
+    spreads["term_structure"] = -1.0
+    one = fv.evaluate_one(spreads, "CE", spreads["date"].max(),
+                          front_dte=4, back_dte=11, min_comparables=8)
+    assert one["raw_signal"] == fv.SELL
