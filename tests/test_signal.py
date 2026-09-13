@@ -295,3 +295,68 @@ def test_comparables_respects_the_bucket_method():
     ev = fv.evaluate(spreads, method=fv.BUCKET, min_comparables=8)
     comps = fv.comparables(spreads, "CE", ev.iloc[-1]["date"], method=fv.BUCKET)
     assert len(comps) == ev.iloc[-1]["n_comparables"]
+
+
+# ------------------------------------------------- several pairs per session
+
+def make_pair_row(deb, front_dte, back_dte, day, iv=16.0, spot=20000.0,
+                  option_type="CE"):
+    return {
+        "date": day, "option_type": option_type, "strike": spot, "spot": spot,
+        "front_expiry": day + timedelta(days=front_dte),
+        "back_expiry": day + timedelta(days=back_dte),
+        "front_dte": front_dte, "back_dte": back_dte, "front_kind": "weekly",
+        "back_kind": "monthly", "front_px": 100.0, "back_px": 100.0 + deb,
+        "debit": deb, "debit_pct": deb / spot * 100.0, "front_iv": iv,
+        "back_iv": iv - 1.0, "term_structure": 1.0,
+        "front_tradeable": True, "back_tradeable": True, "lot_size": 50.0,
+    }
+
+
+def test_other_pairs_from_today_are_not_comparables():
+    """With several expiry pairs per session, the rows sitting above this one in
+    the frame include today's other pairs. Those were not knowable when today
+    began, so they must not enter the distribution."""
+    history = [97.0, 103.0, 99.0, 101.0, 96.0, 104.0, 98.0, 102.0]
+    rows = [make_pair_row(d, 4, 11, date(2024, 1, 1) + timedelta(days=i))
+            for i, d in enumerate(history)]
+
+    today = date(2024, 1, 20)
+    # Three pairs priced on the same session, the target one last.
+    rows.append(make_pair_row(500.0, 4, 11, today))
+    rows.append(make_pair_row(600.0, 4, 11, today))
+    rows.append(make_pair_row(70.0, 4, 11, today))
+    spreads = pd.DataFrame(rows)
+
+    ev = fv.evaluate(spreads, min_comparables=8)
+    scored = ev[ev["date"] == today]
+
+    # Each of today's rows sees the same eight historical days - never each other.
+    assert (scored["n_comparables"] == 8).all()
+    assert scored["fv_mean_pct"].nunique() == 1
+
+
+def test_evaluate_one_matches_evaluate_for_the_same_pair():
+    """The explorer and the series must agree, or the dashboard is describing a
+    different model from the one being backtested."""
+    history = [97.0, 103.0, 99.0, 101.0, 96.0, 104.0, 98.0, 102.0]
+    rows = [make_pair_row(d, 4, 11, date(2024, 1, 1) + timedelta(days=i))
+            for i, d in enumerate(history)]
+    today = date(2024, 1, 20)
+    rows.append(make_pair_row(70.0, 4, 11, today))
+    spreads = pd.DataFrame(rows)
+
+    from_series = fv.evaluate(spreads, min_comparables=8).iloc[-1]
+    one = fv.evaluate_one(spreads, "CE", today, front_dte=4, back_dte=11,
+                          min_comparables=8)
+
+    assert one["signal"] == from_series["signal"]
+    assert one["z_score"] == pytest.approx(from_series["z_score"])
+    assert one["n_comparables"] == from_series["n_comparables"]
+
+
+def test_evaluate_one_rejects_a_pair_that_does_not_exist():
+    spreads = pd.DataFrame([make_pair_row(100.0, 4, 11, date(2024, 1, 1))])
+    out = fv.evaluate_one(spreads, "CE", date(2024, 1, 1), front_dte=9,
+                          back_dte=40)
+    assert out["signal"] == fv.INSUFFICIENT

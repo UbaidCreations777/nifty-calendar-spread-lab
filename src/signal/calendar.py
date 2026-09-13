@@ -40,8 +40,29 @@ def _pick_legs(day_expiries: pd.DataFrame) -> tuple[pd.Series, pd.Series] | None
     return front, back_pool.iloc[0]
 
 
-def build_spreads(chain: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
-    """One ATM calendar per (date, option_type)."""
+def _all_pairs(day_expiries: pd.DataFrame, max_back_dte: int) -> list:
+    """Every front/back combination available on the day.
+
+    The strategy trades one specific pair, but a desk wants to look at any of
+    them - and the fair-value history is richer for having them all, since a pair
+    the strategy never trades is still a comparable state for one it does.
+    """
+    ex = day_expiries.sort_values("dte")
+    ex = ex[ex["dte"] <= max_back_dte]
+    rows = ex.to_dict("records")
+    return [(f, b) for i, f in enumerate(rows) for b in rows[i + 1:]]
+
+
+def build_spreads(chain: pd.DataFrame, all_pairs: bool = False,
+                  max_back_dte: int = C.BACK_DTE_MAX,
+                  verbose: bool = True) -> pd.DataFrame:
+    """ATM calendars per (date, option_type).
+
+    By default this is the one pair the strategy defines - nearest expiry sold,
+    nearest monthly beyond it bought. With `all_pairs`, every front/back
+    combination on the day is built instead, which is what the explorer view and
+    the comparable history use.
+    """
     rows = []
     dates = sorted(chain["date"].unique())
 
@@ -49,56 +70,69 @@ def build_spreads(chain: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
         day = chain[chain["date"] == d]
         expiries = (day[["expiry", "kind", "dte"]]
                     .drop_duplicates().sort_values("dte"))
-        legs = _pick_legs(expiries)
-        if legs is None:
-            continue
-        front, back = legs
 
-        for opt in ("CE", "PE"):
-            f = day[(day["expiry"] == front["expiry"]) & (day["option_type"] == opt)]
-            b = day[(day["expiry"] == back["expiry"]) & (day["option_type"] == opt)]
-            if f.empty or b.empty:
-                continue
+        if all_pairs:
+            pairs = _all_pairs(expiries, max_back_dte)
+        else:
+            legs = _pick_legs(expiries)
+            pairs = [legs] if legs is not None else []
 
-            # Both legs must exist at the same strike for this to be a calendar.
-            common = np.intersect1d(f["strike"].to_numpy(), b["strike"].to_numpy())
-            if common.size == 0:
-                continue
-
-            forward = float(f["forward"].iloc[0])
-            atm_strike = float(common[np.argmin(np.abs(common - forward))])
-            fr = f[f["strike"] == atm_strike].iloc[0]
-            bk = b[b["strike"] == atm_strike].iloc[0]
-            if not np.isfinite(fr["iv"]) or not np.isfinite(bk["iv"]):
-                continue
-
-            spot = float(fr["spot"])
-            debit = float(bk["px"] - fr["px"])
-            rows.append({
-                "date": d,
-                "option_type": opt,
-                "strike": atm_strike,
-                "spot": spot,
-                "front_expiry": front["expiry"],
-                "back_expiry": back["expiry"],
-                "front_dte": int(front["dte"]),
-                "back_dte": int(back["dte"]),
-                "front_kind": front["kind"],
-                "front_px": float(fr["px"]),
-                "back_px": float(bk["px"]),
-                "debit": debit,
-                "debit_pct": debit / spot * 100.0,
-                "front_iv": float(fr["iv"]) * 100.0,
-                "back_iv": float(bk["iv"]) * 100.0,
-                "term_structure": (float(fr["iv"]) - float(bk["iv"])) * 100.0,
-                "front_tradeable": bool(fr["tradeable"]),
-                "back_tradeable": bool(bk["tradeable"]),
-                "lot_size": float(fr["lot_size"]) if np.isfinite(fr["lot_size"]) else np.nan,
-            })
+        for front, back in pairs:
+            rows.extend(_build_pair(day, d, front, back))
 
         if verbose and (i + 1) % 200 == 0:
             print(f"  spreads: {i + 1}/{len(dates)} days", flush=True)
 
     if not rows:
         raise ValueError("no calendar spreads could be built - check DTE windows")
-    return pd.DataFrame(rows).sort_values(["date", "option_type"]).reset_index(drop=True)
+    return (pd.DataFrame(rows)
+            .sort_values(["date", "option_type", "front_dte", "back_dte"])
+            .reset_index(drop=True))
+
+
+def _build_pair(day: pd.DataFrame, d, front, back) -> list:
+    """The ATM calendar for one expiry pair on one day, per option type."""
+    rows = []
+    for opt in ("CE", "PE"):
+        f = day[(day["expiry"] == front["expiry"]) & (day["option_type"] == opt)]
+        b = day[(day["expiry"] == back["expiry"]) & (day["option_type"] == opt)]
+        if f.empty or b.empty:
+            continue
+
+        # Both legs must exist at the same strike for this to be a calendar.
+        common = np.intersect1d(f["strike"].to_numpy(), b["strike"].to_numpy())
+        if common.size == 0:
+            continue
+
+        forward = float(f["forward"].iloc[0])
+        atm_strike = float(common[np.argmin(np.abs(common - forward))])
+        fr = f[f["strike"] == atm_strike].iloc[0]
+        bk = b[b["strike"] == atm_strike].iloc[0]
+        if not np.isfinite(fr["iv"]) or not np.isfinite(bk["iv"]):
+            continue
+
+        spot = float(fr["spot"])
+        debit = float(bk["px"] - fr["px"])
+        rows.append({
+            "date": d,
+            "option_type": opt,
+            "strike": atm_strike,
+            "spot": spot,
+            "front_expiry": front["expiry"],
+            "back_expiry": back["expiry"],
+            "front_dte": int(front["dte"]),
+            "back_dte": int(back["dte"]),
+            "front_kind": front["kind"],
+            "back_kind": back["kind"],
+            "front_px": float(fr["px"]),
+            "back_px": float(bk["px"]),
+            "debit": debit,
+            "debit_pct": debit / spot * 100.0,
+            "front_iv": float(fr["iv"]) * 100.0,
+            "back_iv": float(bk["iv"]) * 100.0,
+            "term_structure": (float(fr["iv"]) - float(bk["iv"])) * 100.0,
+            "front_tradeable": bool(fr["tradeable"]),
+            "back_tradeable": bool(bk["tradeable"]),
+            "lot_size": float(fr["lot_size"]) if np.isfinite(fr["lot_size"]) else np.nan,
+        })
+    return rows

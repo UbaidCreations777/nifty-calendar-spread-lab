@@ -19,6 +19,7 @@ from .signal import calendar, chain as chain_mod, fair_value
 
 CHAIN_PATH = C.DATA_PROCESSED / "chain.parquet"
 SPREADS_PATH = C.DATA_PROCESSED / "spreads.parquet"
+ALL_PAIRS_PATH = C.DATA_PROCESSED / "spreads_all.parquet"
 SIGNAL_PATH = C.DATA_PROCESSED / "signals.parquet"
 TRADES_PATH = C.DATA_PROCESSED / "trades.parquet"
 EQUITY_PATH = C.DATA_PROCESSED / "equity.parquet"
@@ -45,6 +46,27 @@ def build_spreads(chain: pd.DataFrame, rebuild: bool = False) -> pd.DataFrame:
     C.DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
     spreads.to_parquet(SPREADS_PATH, index=False)
     return spreads
+
+
+def build_all_pairs(rebuild: bool = False) -> pd.DataFrame:
+    """Every front/back expiry combination per day, for the explorer view.
+
+    The backtest deliberately does not use this: it trades one defined structure,
+    and choosing the most stretched reading out of every pair on offer would be
+    picking the winner from a much larger draw. It exists so a structure can be
+    looked up and priced against its own history.
+    """
+    if ALL_PAIRS_PATH.exists() and not rebuild:
+        out = pd.read_parquet(ALL_PAIRS_PATH)
+    else:
+        chain = build_chain()
+        print("building every expiry pair...", flush=True)
+        out = calendar.build_spreads(chain, all_pairs=True)
+        C.DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
+        out.to_parquet(ALL_PAIRS_PATH, index=False)
+    for col in ("date", "front_expiry", "back_expiry"):
+        out[col] = pd.to_datetime(out[col]).dt.date
+    return out
 
 
 def build_signals(chain: pd.DataFrame, rebuild: bool = False,

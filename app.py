@@ -98,80 +98,144 @@ tab_today, tab_surface, tab_edge, tab_backtest, tab_robust = st.tabs(
     ["Today's signal", "Volatility surface", "Does the signal work?",
      "Backtest", "Robustness"])
 
+@st.cache_data(show_spinner="Building every expiry pair…")
+def load_all_pairs():
+    """Each day's full grid of front/back combinations, for the explorer."""
+    from src.pipeline import build_all_pairs
+    return build_all_pairs()
+
+
+def render_verdict(row: dict, source: pd.DataFrame, as_of):
+    """One structure's card and its comparable-history chart."""
+    left, right = st.columns([1, 1.6])
+
+    with left:
+        st.markdown(f"### {row['option_type']} calendar")
+        st.markdown(
+            f"**Sell** {row['front_expiry']} ({row['front_dte']}d) · "
+            f"**Buy** {row['back_expiry']} ({row['back_dte']}d)  \n"
+            f"Strike {row['strike']:,.0f} · spot {row['spot']:,.0f}")
+
+        c1, c2 = st.columns(2)
+        c1.metric("Debit today", f"{row['debit']:,.1f} pts",
+                  f"{row['debit_pct']:.3f}% of spot")
+        if row["signal"] == fv.INSUFFICIENT:
+            c2.metric("Verdict", "No call",
+                      f"{int(row['n_comparables'])} comparables")
+            st.info(
+                f"Only {int(row['n_comparables'])} comparable days — below "
+                f"the {min_n} needed. The honest answer is no signal, not a "
+                "z-score computed from a handful of observations.")
+            return
+
+        c2.metric("Fair value", f"{row['fv_mean_pct']:.3f}%",
+                  f"{row['cheapness_pct']:+.1f}% vs history")
+
+        verdict = row["signal"].upper()
+        colour = {fv.BUY: BUY_COLOUR, fv.SELL: SELL_COLOUR}.get(
+            row["signal"], NEUTRAL)
+        st.markdown(
+            f"<div style='padding:12px;border-radius:8px;background:{colour};"
+            f"color:white;font-weight:600;font-size:1.1rem'>{verdict}"
+            f" &nbsp;·&nbsp; z = {row['z_score']:+.2f}"
+            f" &nbsp;·&nbsp; {row['percentile']:.0f}th percentile</div>",
+            unsafe_allow_html=True)
+        st.caption(
+            f"Front ATM IV {row['front_iv']:.1f} · back {row['back_iv']:.1f} "
+            f"· term structure {row['term_structure']:+.2f} vol points · "
+            f"{int(row['n_comparables'])} comparable days")
+
+    with right:
+        hist = fv.comparables(source, row["option_type"], as_of,
+                              method=method, k=k_neighbours,
+                              max_distance=max_dist,
+                              iv_half_width=iv_width,
+                              back_dte_tolerance=back_tol,
+                              front_dte=int(row["front_dte"]),
+                              back_dte=int(row["back_dte"]))
+        if hist.empty:
+            st.info("No comparable history to plot.")
+            return
+
+        fig = px.histogram(hist, x="debit_pct", nbins=15,
+                           title="What this structure cost on comparable days",
+                           labels={"debit_pct": "Debit (% of spot)"})
+        fig.update_traces(marker_color="#c9ced6")
+        fig.add_vline(x=row["debit_pct"], line_color=BUY_COLOUR
+                      if row["signal"] == fv.BUY else SELL_COLOUR,
+                      line_width=3, annotation_text="today")
+        # Mid grey rather than near-black: the page renders in whichever theme
+        # the viewer has set, and a dark annotation disappears against a dark
+        # background.
+        fig.add_vline(x=row["fv_mean_pct"], line_dash="dash",
+                      line_color="#8a8f98", annotation_text="mean",
+                      annotation_font_color="#8a8f98")
+        fig.update_layout(height=340, showlegend=False,
+                          margin=dict(t=48, b=8, l=8, r=8))
+        st.plotly_chart(fig, use_container_width=True)
+        if method == fv.KNN:
+            st.caption(
+                f"The {len(hist)} nearest historical days in state space — "
+                f"average distance {hist['state_distance'].mean():.2f} "
+                "(1.0 ≈ one day's difference on the front leg).")
+        else:
+            st.caption(f"{len(hist)} historical days inside the bucket.")
+
+
 # ---------------------------------------------------------------- today's tab
 with tab_today:
     latest = fv.latest_view(signals)
     as_of = latest["date"].iloc[0]
     st.subheader(f"Reading for {as_of}")
 
-    for _, row in latest.iterrows():
-        left, right = st.columns([1, 1.6])
+    mode = st.radio(
+        "Which structure?",
+        ["The strategy's pair", "Pick the expiries yourself"],
+        horizontal=True,
+        help=("The strategy always sells the nearest expiry and buys the "
+              "nearest monthly beyond it. Any other pair can still be priced "
+              "against its own history — it is simply not what the backtest "
+              "trades."))
 
-        with left:
-            st.markdown(f"### {row['option_type']} calendar")
-            st.markdown(
-                f"**Sell** {row['front_expiry']} ({row['front_dte']}d) · "
-                f"**Buy** {row['back_expiry']} ({row['back_dte']}d)  \n"
-                f"Strike {row['strike']:,.0f} · spot {row['spot']:,.0f}")
+    if mode == "The strategy's pair":
+        for _, row in latest.iterrows():
+            render_verdict(row.to_dict(), data["spreads"], as_of)
+    else:
+        grid = load_all_pairs()
+        today_grid = grid[grid["date"] == as_of]
 
-            c1, c2 = st.columns(2)
-            c1.metric("Debit today", f"{row['debit']:,.1f} pts",
-                      f"{row['debit_pct']:.3f}% of spot")
-            if row["signal"] == fv.INSUFFICIENT:
-                c2.metric("Verdict", "No call",
-                          f"{int(row['n_comparables'])} comparables")
-                st.info(
-                    f"Only {int(row['n_comparables'])} comparable days — below "
-                    f"the {min_n} needed. The honest answer is no signal, not a "
-                    "z-score computed from a handful of observations.")
-                continue
+        if today_grid.empty:
+            st.info(f"No expiry grid available for {as_of}.")
+        else:
+            c1, c2, c3 = st.columns(3)
+            opt = c1.selectbox("Option type", ["PE", "CE"])
+            pool = today_grid[today_grid["option_type"] == opt]
 
-            c2.metric("Fair value", f"{row['fv_mean_pct']:.3f}%",
-                      f"{row['cheapness_pct']:+.1f}% vs history")
+            fronts = sorted(pool["front_expiry"].unique())
+            front = c2.selectbox(
+                "Sell (front leg)", fronts,
+                format_func=lambda e: f"{e}  ({(pool[pool.front_expiry == e]['front_dte'].iloc[0])}d)")
 
-            verdict = row["signal"].upper()
-            colour = {fv.BUY: BUY_COLOUR, fv.SELL: SELL_COLOUR}.get(
-                row["signal"], NEUTRAL)
-            st.markdown(
-                f"<div style='padding:12px;border-radius:8px;background:{colour};"
-                f"color:white;font-weight:600;font-size:1.1rem'>{verdict}"
-                f" &nbsp;·&nbsp; z = {row['z_score']:+.2f}"
-                f" &nbsp;·&nbsp; {row['percentile']:.0f}th percentile</div>",
-                unsafe_allow_html=True)
-            st.caption(
-                f"Front ATM IV {row['front_iv']:.1f} · back {row['back_iv']:.1f} "
-                f"· term structure {row['term_structure']:+.2f} vol points · "
-                f"{int(row['n_comparables'])} comparable days")
-
-        with right:
-            hist = fv.comparables(data["spreads"], row["option_type"], as_of,
-                                  method=method, k=k_neighbours,
-                                  max_distance=max_dist,
-                                  iv_half_width=iv_width,
-                                  back_dte_tolerance=back_tol)
-            if hist.empty:
-                st.info("No comparable history to plot.")
-                continue
-
-            fig = px.histogram(hist, x="debit_pct", nbins=15,
-                               title="What this structure cost on comparable days",
-                               labels={"debit_pct": "Debit (% of spot)"})
-            fig.update_traces(marker_color="#c9ced6")
-            fig.add_vline(x=row["debit_pct"], line_color=BUY_COLOUR
-                          if row["signal"] == fv.BUY else SELL_COLOUR,
-                          line_width=3, annotation_text="today")
-            fig.add_vline(x=row["fv_mean_pct"], line_dash="dash",
-                          line_color="#333", annotation_text="mean")
-            fig.update_layout(height=340, showlegend=False,
-                              margin=dict(t=48, b=8, l=8, r=8))
-            st.plotly_chart(fig, use_container_width=True)
-            if method == fv.KNN:
-                st.caption(
-                    f"The {len(hist)} nearest historical days in state space — "
-                    f"average distance {hist['state_distance'].mean():.2f} "
-                    "(1.0 ≈ one day's difference on the front leg).")
+            backs = sorted(pool[pool["front_expiry"] == front]["back_expiry"].unique())
+            if not backs:
+                st.info("No back leg available beyond that expiry.")
             else:
-                st.caption(f"{len(hist)} historical days inside the bucket.")
+                sub = pool[pool["front_expiry"] == front]
+                back = c3.selectbox(
+                    "Buy (back leg)", backs,
+                    format_func=lambda e: f"{e}  ({(sub[sub.back_expiry == e]['back_dte'].iloc[0])}d)")
+
+                chosen = sub[sub["back_expiry"] == back].iloc[0]
+                verdict = fv.evaluate_one(
+                    grid, opt, as_of,
+                    front_dte=int(chosen["front_dte"]),
+                    back_dte=int(chosen["back_dte"]),
+                    z_entry=z_entry,
+                    use_term_structure_filter=use_filter,
+                    min_comparables=min_n,
+                    method=method, k=k_neighbours, max_distance=max_dist,
+                    iv_half_width=iv_width, back_dte_tolerance=back_tol)
+                render_verdict(verdict, grid, as_of)
 
     st.markdown("---")
     st.subheader("Signal history")

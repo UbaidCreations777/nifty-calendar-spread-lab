@@ -119,10 +119,14 @@ def evaluate(spreads: pd.DataFrame,
         front_dte = book["front_dte"].to_numpy()
         back_dte = book["back_dte"].to_numpy()
         iv = book["front_iv"].to_numpy()
+        dates = book["date"].to_numpy()
 
         for i in range(len(book)):
             row = book.iloc[i].to_dict()
-            past = np.arange(i)                  # strictly earlier days only
+            # Strictly earlier *days*, not earlier rows. When the series holds
+            # several expiry pairs per session, the rows above this one include
+            # today's other pairs - which were not knowable when today opened.
+            past = np.flatnonzero(dates < dates[i])
 
             if method == KNN:
                 if past.size == 0:
@@ -193,19 +197,27 @@ def comparables(spreads: pd.DataFrame, option_type: str, as_of,
                 method: str = KNN, k: int = C.KNN_K,
                 max_distance: float = C.MAX_STATE_DISTANCE,
                 iv_half_width: float = C.IV_BUCKET_HALF_WIDTH,
-                back_dte_tolerance: int = C.BACK_DTE_TOLERANCE) -> pd.DataFrame:
+                back_dte_tolerance: int = C.BACK_DTE_TOLERANCE,
+                front_dte: int | None = None,
+                back_dte: int | None = None) -> pd.DataFrame:
     """The historical days a given verdict was actually built from.
 
     The dashboard plots what the model used rather than re-deriving a similar set
     with its own filter, so the chart cannot drift away from the signal.
+
+    `front_dte`/`back_dte` pick one expiry pair out of a session that holds
+    several; without them the first pair for that date is used.
     """
     book = (spreads[spreads["option_type"] == option_type]
             .sort_values("date").reset_index(drop=True))
     loc = book.index[book["date"] == as_of]
+    if front_dte is not None:
+        loc = [j for j in loc if book.loc[j, "front_dte"] == front_dte
+               and book.loc[j, "back_dte"] == back_dte]
     if len(loc) == 0:
         return book.iloc[0:0]
     i = int(loc[0])
-    past = np.arange(i)
+    past = np.flatnonzero(book["date"].to_numpy() < book["date"].to_numpy()[i])
     if past.size == 0:
         return book.iloc[0:0]
 
@@ -234,6 +246,54 @@ def comparables(spreads: pd.DataFrame, option_type: str, as_of,
     out["state_distance"] = np.nan
     out["weight"] = 1.0
     return out
+
+
+def evaluate_one(spreads: pd.DataFrame, option_type: str, as_of,
+                 front_dte: int, back_dte: int,
+                 z_entry: float = C.Z_ENTRY,
+                 use_term_structure_filter: bool = True,
+                 min_comparables: int = C.MIN_COMPARABLES,
+                 **match_kwargs) -> dict:
+    """The verdict for one expiry pair on one day.
+
+    `evaluate` scores an entire series; this scores a single structure a user has
+    asked about. Both read their comparables through `comparables`, so an
+    arbitrary pair picked in the dashboard is judged by exactly the rule the
+    strategy is judged by.
+    """
+    book = spreads[(spreads["option_type"] == option_type)
+                   & (spreads["date"] == as_of)
+                   & (spreads["front_dte"] == front_dte)
+                   & (spreads["back_dte"] == back_dte)]
+    if book.empty:
+        return {"signal": INSUFFICIENT, "error": "no such pair on this date"}
+
+    row = book.iloc[0].to_dict()
+    comps = comparables(spreads, option_type, as_of, front_dte=front_dte,
+                        back_dte=back_dte, **match_kwargs)
+
+    if len(comps) < min_comparables:
+        return {**row, **_blank(len(comps))}
+
+    stats = _weighted_stats(comps["debit_pct"].to_numpy(),
+                            comps["weight"].to_numpy(), row["debit_pct"])
+    stats["match_distance"] = float(comps["state_distance"].mean()) \
+        if comps["state_distance"].notna().any() else np.nan
+
+    if (not np.isfinite(stats["z_score"])
+            or abs(stats["fv_mean_pct"]) < 1e-12
+            or stats["fv_std_pct"] / abs(stats["fv_mean_pct"])
+            < C.MIN_RELATIVE_DISPERSION):
+        return {**row, **stats, "signal": INSUFFICIENT, "z_score": np.nan}
+
+    z = stats["z_score"]
+    signal = BUY if z <= -z_entry else SELL if z >= z_entry else FLAT
+    if use_term_structure_filter and signal == BUY and row["term_structure"] <= 0:
+        signal = FLAT
+    if use_term_structure_filter and signal == SELL and row["term_structure"] >= 0:
+        signal = FLAT
+
+    return {**row, **stats, "signal": signal}
 
 
 def latest_view(evaluated: pd.DataFrame) -> pd.DataFrame:
