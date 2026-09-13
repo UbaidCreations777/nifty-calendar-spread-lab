@@ -290,12 +290,54 @@ From the final run — know these cold:
 | Max drawdown | −1.09% |
 | Sharpe | −0.21 |
 | Both directions, for contrast | −2.51%, Sharpe −0.93 |
+| Intraday, real minute fills | **−0.26%, Sharpe −0.34, 37% win rate** |
+| Intraday, daily-proxy fills (rejected) | +1.17% — an artefact, see 7b |
+| Minute data validated | open/high/low match NSE on 99.7% of contract-days |
 
 Hit rates from the edge study, three-day horizon: **70%** at z < −2, **67%** at
 −1.5 to −1, **29%** at z > 2.
 
 **The line to lead with:** gross P&L is ₹2 on ₹10 lakh. Not a small profit — zero.
 The call has direction and no magnitude, and the costs do the rest.
+
+---
+
+## 7b. The strongest thing in this project
+
+The sequence, in order — this is what to walk an interviewer through:
+
+1. The overnight backtest lost money, and the edge study said why: the signal has
+   direction but not magnitude.
+2. A calendar is short gamma, so the obvious suspect was the overnight gaps. I
+   tested closing before the bell using bhavcopy's daily open and close, and it
+   turned positive — +1.10%, Sharpe 0.66, win rate up from 55% to 64%.
+3. **I did not believe it**, and I wrote down exactly why before testing further:
+   each leg's "open" in bhavcopy is its own first trade at an unknown moment, so
+   the entry spread I was pricing never existed as a quote. I quantified what
+   would have to be true for it to survive — capturing 29% of the session's move.
+4. I got minute data, validated it against NSE first (open/high/low match on
+   99.7% of contract-days; close matches on NSE's last-half-hour VWAP convention;
+   volume differs by exactly the lot size), then re-ran the identical trades with
+   both legs priced at the same instant.
+5. The edge vanished: +1.17% became **−0.26%**, win rate 74% became 37%, gross
+   ₹15,123 became ₹837. The assumed entry had been favourable by a median of 4.35
+   points against a median real move of 6.85 — the phantom advantage was two
+   thirds the size of the thing being traded.
+6. A sweep of 28 entry/exit times confirmed it is not a clock problem: 9 positive,
+   median −0.17%, and the best result is the best of 28 on 19 trades.
+
+> **The line:** I found a result I wanted to be true, named the assumption it
+> depended on, went and got the data that could kill it, and it did.
+
+**Q: Why not just publish the +1.10% version?**
+Because it was not a strategy, it was an artefact of how the data was recorded.
+Someone would have traded it.
+
+**Q: How did you know to be suspicious?**
+Because of what the number was made of. The edge was concentrated in the entry
+price, not in the exit, and the entry price was the one thing bhavcopy could not
+actually tell me. When a result depends most on the weakest part of your data,
+that is the thing to go and test.
 
 ---
 

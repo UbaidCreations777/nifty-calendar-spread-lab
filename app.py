@@ -305,6 +305,33 @@ with tab_backtest:
                 "direction — see the previous tab — but not enough magnitude to "
                 "pay for four orders a round trip.")
 
+        with st.expander(
+                "Holding it intraday instead — and why the version that worked "
+                "was not real"):
+            st.markdown(
+                "A calendar is short gamma, so the overnight gaps were the "
+                "obvious suspect. Closing before the bell **did** turn the "
+                "result positive — but only while the entry price was assumed "
+                "rather than observed.\n\n"
+                "| | Overnight | Intraday, *assumed* fills | Intraday, **real minute** fills |\n"
+                "|---|---|---|---|\n"
+                "| Return | −0.35% | +1.17% | **−0.26%** |\n"
+                "| Sharpe | −0.21 | 0.94 | **−0.34** |\n"
+                "| Win rate | 55% | 74% | **37%** |\n"
+                "| Gross P&L | ₹2 | ₹15,123 | **₹837** |\n\n"
+                "The middle column priced each leg at its own first trade of the "
+                "day. Those prints are minutes apart, so that spread never "
+                "existed as a quote — it was favourable by a median of 4.35 "
+                "points against a median real move of 6.85. Re-pricing both legs "
+                "at the *same instant* removed the entire edge.\n\n"
+                "It is not a question of picking the right clock either: across "
+                "28 entry/exit time combinations, 9 are positive and the median "
+                "is −0.17%.\n\n"
+                "The minute data was checked against NSE before being trusted — "
+                "open, high and low match bhavcopy on 99.7% of contract-days, "
+                "and close matches once compared on NSE's own last-half-hour "
+                "VWAP convention rather than the last trade.")
+
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=equity["date"], y=equity["equity"],
                                  name="Equity", line=dict(color="#1f4e79")))

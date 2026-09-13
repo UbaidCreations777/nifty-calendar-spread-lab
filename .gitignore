@@ -12,3 +12,6 @@ venv/
 .ipynb_checkpoints/
 .streamlit/secrets.toml
 .DS_Store
+
+# Third-party minute data, ~900MB - re-downloadable, not repo content
+data/minute/

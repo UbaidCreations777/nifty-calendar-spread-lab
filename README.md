@@ -160,6 +160,41 @@ So the variant is worth taking seriously if — and only if — a real execution
 capture roughly a third of the session's move in the spread. That is a question
 for minute data, not for this dataset.
 
+### The minute data answered it, and the answer was no
+
+Minute bars for 2024–2026 were obtained and checked against NSE before being used
+— open, high and low match bhavcopy on 99.7% of contract-days, and close matches
+once compared on NSE's own convention, the last-half-hour VWAP, rather than the
+last trade. The volume column differs by exactly the lot size, because the file
+counts units where bhavcopy counts contracts. The data is real.
+
+Re-running the same 19 trades with both legs priced at the **same instant**:
+
+| | Daily proxy (assumed fills) | **Real minute fills** |
+|---|---|---|
+| Return | +1.17% | **−0.26%** |
+| Sharpe | 0.94 | **−0.34** |
+| Win rate | 74% | **37%** |
+| Gross P&L | ₹15,123 | **₹837** |
+
+Same signals, same sessions, same sizing. Only the fill prices changed — and the
+entire edge went with them.
+
+**Why:** the assumed entry took each leg at its own first trade of the day, and
+those prints are minutes apart. Measured against the real 9:16 spread, that
+assumption was favourable by a median of **4.35 points** on a structure whose
+median real move over the session is **6.85 points**. The phantom entry advantage
+was about two thirds the size of the move being traded, so it, rather than the
+signal, was producing the P&L.
+
+It is not a matter of picking the right clock either. Across 28 entry/exit time
+combinations, 9 are positive, the median is −0.17%, and the best (+0.45%, 11:00
+to 15:25) is the best of 28 on a 19-trade sample — which is what noise looks like.
+
+**The conclusion stands where it started: the signal has direction and no
+tradeable magnitude, overnight or intraday.** The intraday result was the
+assumption talking, and the assumption was named before it was tested.
+
 ### What was tried and did not help
 
 Capping the holding period at two, three and five days — motivated by the signal's
@@ -174,7 +209,9 @@ parameter fitted to noise.
 ```
 src/
   config.py              every assumption, in one file
-  data/nse_fo.py         NSE F&O bhavcopy download - both archive formats
+  data/
+    nse_fo.py            NSE F&O bhavcopy download - both archive formats
+    minute.py            third-party minute bars, filtered and NSE-validated
   pricing/
     black_scholes.py     Black-76 price and Greeks, written out
     implied_vol.py       Newton-Raphson with a bisection fallback
@@ -187,7 +224,8 @@ src/
     sensitivity.py       the same result across a parameter grid
   backtest/
     engine.py            event loop, sizing, exits (overnight)
-    intraday.py          same signal, flat by the close
+    intraday.py          same signal, flat by the close (daily proxy)
+    intraday_minute.py   real minute fills, both legs at one instant
     costs.py             STT, exchange, SEBI, stamp, GST, slippage
     metrics.py           Sharpe, Sortino, drawdown, cost drag
 app.py                   Streamlit dashboard
@@ -236,9 +274,12 @@ does not shrink the profit, it usually reverses its sign.
 
 ## Known limitations
 
-- **End-of-day data.** Bhavcopy is one price per contract per day, so intraday
-  entry timing, the real bid-ask, and any intraday exit cannot be tested. Entries
-  are assumed at the settlement price plus a slippage allowance.
+- **Still no order book.** Minute bars fixed the timing problem but they are
+  traded prices, not quotes. A spread whose edge is a few tenths of a percent of
+  spot lives or dies on the bid-ask, and that is still modelled as a flat tick
+  allowance rather than measured.
+- **Minute coverage is 2024-01 to 2026-04**, against bhavcopy's 2023-09 to
+  2026-09, so the intraday tests run on a shorter window than the overnight ones.
 - **Margin is approximated.** A calendar is margined as a spread, and the exact
   number needs the exchange's SPAN risk parameter file. A flat percentage of
   notional stands in for it, which will be wrong in a vol shock — exactly when it
