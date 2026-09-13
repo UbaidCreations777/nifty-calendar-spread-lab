@@ -296,9 +296,13 @@ does not shrink the profit, it usually reverses its sign.
 pip install -r requirements.txt
 python -m src.data.download          # NSE F&O bhavcopy, cached locally
 python -m src.pipeline               # chain -> signal -> backtest
-streamlit run app.py                 # dashboard
-pytest -q                            # pricing validation + look-ahead tests
+python -m streamlit run app.py       # dashboard
+python -m pytest -q                  # pricing validation + look-ahead tests
 ```
+
+Invoked as `python -m …` rather than as bare `streamlit` and `pytest`, because
+pip installs those launchers into a scripts directory that is not on PATH by
+default on Windows. The module form works regardless.
 
 The data step downloads from NSE's public archive and caches each day to
 `data/raw/`, so it only pays the download cost once.
