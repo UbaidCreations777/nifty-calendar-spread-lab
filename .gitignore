@@ -15,3 +15,6 @@ venv/
 
 # Third-party minute data, ~900MB - re-downloadable, not repo content
 data/minute/
+
+# Continuity doc for Claude sessions - local working state, not repo content
+CLAUDE.md
