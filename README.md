@@ -28,7 +28,24 @@ So a day is described by the state it was priced in:
 | Front leg days to expiry | The sold leg, where theta and gamma move fastest |
 | Back leg days to expiry | The bought leg, within a ±2 day tolerance |
 | Front ATM implied vol | The vol regime, bucketed to ±0.5 vol points |
+| Gap between the two forwards | Each expiry has its own forward, and the gap moves the debit on its own |
 | Option type | CE and PE carry different skew, so they get separate histories |
+
+The fourth one was missing at first, and adding it is the clearest correction in
+the project. A calendar's legs share a strike but are priced off two different
+forwards; when the gap between those forwards widens, the call leg sits
+relatively more in the money and the put leg relatively less. Measured within
+otherwise-matched states, the correlation between that gap and the debit is
+**+0.36 for calls and −0.18 for puts** — and the opposite signs are the argument,
+because that is what put-call parity predicts and noise does not produce a sign
+flip that agrees with theory.
+
+Including it tightens the fair-value estimate by 6.2% across ~900 scored days. It
+does **not** improve the backtest — that got slightly worse — and it costs
+coverage, since a fourth dimension makes neighbours harder to find. It is kept
+because it corrects a mis-specification with a known mechanism, and because the
+measurement with the sample to support it is the dispersion, not a
+seventeen-trade P&L.
 
 Today's debit is compared against every earlier day in the same state. If it sits
 far below that distribution the spread is cheap and the signal is a buy; far
@@ -76,14 +93,15 @@ fault. `edge_study.py` separates the first one out: for every scored day it
 measures what the *same legs* were worth three days later, grouped by how
 stretched the reading was at the time.
 
-| z-score at the time | What the spread did next | Signal was right |
-|---|---|---|
-| < −2 (very cheap) | widened | **70%** |
-| −1.5 to −1 | widened | **67%** |
-| −0.5 to 0.5 | flat | 52% |
-| 1 to 1.5 | widened | 42% |
-| 1.5 to 2 | widened | 35% |
-| > 2 (very rich) | widened more | **29%** |
+| z-score at the time | n | What the spread did next | Signal was right |
+|---|---|---|---|
+| < −2 (very cheap) | 9 | widened | **89%** |
+| −2 to −1.5 | 16 | widened | **69%** |
+| −1.5 to −1 | 44 | widened | **64%** |
+| −0.5 to 0.5 | 250 | flat | 52% |
+| 0.5 to 1 | 57 | widened | 30% |
+| 1.5 to 2 | 12 | widened | **17%** |
+| > 2 (very rich) | 15 | widened more | **40%** |
 
 **The asymmetry is the finding.** Cheap spreads widen afterwards, which is what a
 long calendar wants, and the call is right about two thirds of the time. Rich
@@ -92,7 +110,8 @@ faster than the back — so selling a rich calendar is betting against the
 structure's own carry, and it is right about a third of the time.
 
 That is a mechanical reason, not a statistical artefact, and it is why the
-strategy trades the long side only.
+strategy trades the long side only. The extreme buckets carry single-digit and
+low-double-digit counts, so the 89% is quoted with its n rather than on its own.
 
 ### The backtest
 
@@ -100,21 +119,22 @@ Three years, NIFTY, ₹10 lakh, long side only, all costs charged:
 
 | | |
 |---|---|
-| Trades | 20 |
-| Win rate | 55% |
-| Gross P&L | **₹2** |
-| Costs | **₹3,521** |
-| Net P&L | −₹3,519 (−0.35%) |
-| Max drawdown | −1.09% |
-| Sharpe | −0.21 |
+| Trades | 17 |
+| Win rate | 52.9% |
+| Gross P&L | **−₹2,596** |
+| Costs | **₹3,020** |
+| Net P&L | −₹5,616 (−0.56%) |
+| Max drawdown | −0.83% |
+| Sharpe | −0.40 |
 
-Gross P&L is within rounding distance of zero. The edge exists in the direction
-of the call and vanishes in its size: four orders a round trip, on a structure
-whose whole move is a few tenths of a percent of spot, costs more than the
-mispricing is worth.
+The edge exists in the direction of the call and vanishes in its size: four
+orders a round trip, on a structure whose whole move is a few tenths of a percent
+of spot, costs more than the mispricing is worth.
 
-Trading both directions is materially worse (−2.51%, Sharpe −0.93), which is the
-asymmetry above showing up in P&L.
+Seventeen trades is not a sample that can settle anything, and no claim here
+rests on it — the direction finding above is measured across 867 scored days
+instead. Trading both directions is materially worse (−2.51%, Sharpe −0.93),
+which is the asymmetry showing up in P&L.
 
 ### Holding it overnight is what costs the money
 
@@ -123,6 +143,11 @@ and every one of those nights is a gap in NIFTY that moves against the leg it
 sold before anything can be done about it. So the same signal was tested with the
 position closed before the bell: decide on the previous day's settlement prices,
 enter at the next session's open, exit at its close.
+
+Both columns below were measured on the configuration *before* the basis entered
+the state, so they are like-for-like with each other but not with the backtest
+table above. The question they answer — whether the fill prices were real — does
+not depend on which state variables the signal matches on.
 
 | | Overnight, long only | **Intraday, long only** |
 |---|---|---|
@@ -194,6 +219,34 @@ to 15:25) is the best of 28 on a 19-trade sample — which is what noise looks l
 **The conclusion stands where it started: the signal has direction and no
 tradeable magnitude, overnight or intraday.** The intraday result was the
 assumption talking, and the assumption was named before it was tested.
+
+### Two things that surface the moment you ask "would this run live?"
+
+It does not, yet — the pipeline runs on bhavcopy, which NSE publishes after the
+close, so the dashboard shows the last settled session. NSE's live option-chain
+endpoint works and carries bid and ask, so a live reading is buildable. Two
+things have to be handled first, and both were measured rather than assumed.
+
+**A morning quote is not comparable to a settlement history.** Across 534
+sessions the ATM calendar debit sits about 9 points below its own end-of-day
+settlement at 10:00, and converges by 15:20. Read a live morning quote against a
+history of closing prices and it reads cheap every single morning. Rebuilding the
+series at 10:00 from minute data and matching it against 10:00 history removes
+the bias exactly:
+
+| | Mean z |
+|---|---|
+| 10:00 reading vs EOD history | −0.497 |
+| 10:00 reading vs 10:00 history | −0.231 |
+| Control: EOD vs EOD, same sessions | −0.252 |
+
+**The z-score is not symmetric.** The debit distribution is right-skewed, so the
+z-scores are too. Symmetric ±1.5 thresholds therefore fire on 6.9% of days above
+and only 3.1% below — more than twice as many sell signals as buys, from
+distribution shape rather than from anything in the market. Since the sell side
+is the side the edge study finds inverted, the model is generating most of its
+signals in its worst direction. The percentile is rank-based and unaffected
+(mean 52.7 against an unbiased 50), which is the fix.
 
 ### What was tried and did not help
 
