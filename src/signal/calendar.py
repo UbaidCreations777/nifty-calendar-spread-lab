@@ -131,6 +131,12 @@ def _build_pair(day: pd.DataFrame, d, front, back) -> list:
             "front_iv": float(fr["iv"]) * 100.0,
             "back_iv": float(bk["iv"]) * 100.0,
             "term_structure": (float(fr["iv"]) - float(bk["iv"])) * 100.0,
+            # The two legs are priced off two different forwards, and the gap
+            # between them moves the debit on its own: at a fixed strike, a
+            # higher back forward makes the call relatively more in the money
+            # and the put relatively less. Two days with identical vol and
+            # identical days to expiry are not the same trade if this differs.
+            "basis": float(bk["forward"]) - float(fr["forward"]),
             "front_tradeable": bool(fr["tradeable"]),
             "back_tradeable": bool(bk["tradeable"]),
             "lot_size": float(fr["lot_size"]) if np.isfinite(fr["lot_size"]) else np.nan,

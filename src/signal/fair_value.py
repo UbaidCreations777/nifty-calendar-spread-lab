@@ -46,12 +46,22 @@ KNN = "knn"
 BUCKET = "bucket"
 
 
-def _state_distance(front_dte, back_dte, iv, i, past) -> np.ndarray:
-    """Distance from day i to each earlier day, in scaled state units."""
+def _state_distance(front_dte, back_dte, iv, i, past,
+                    basis=None) -> np.ndarray:
+    """Distance from day i to each earlier day, in scaled state units.
+
+    `basis` is the gap between the two legs' forwards. It belongs in the state
+    because it moves the debit by itself: at a fixed strike a wider basis pushes
+    the call leg relatively into the money and the put leg out of it, so two days
+    that agree on vol and on both expiries can still be pricing different trades.
+    """
     d_front = (front_dte[past] - front_dte[i]) / C.STATE_SCALE_FRONT_DTE
     d_back = (back_dte[past] - back_dte[i]) / C.STATE_SCALE_BACK_DTE
     d_iv = (iv[past] - iv[i]) / C.STATE_SCALE_IV
-    return np.sqrt(d_front**2 + d_back**2 + d_iv**2)
+    total = d_front**2 + d_back**2 + d_iv**2
+    if basis is not None:
+        total = total + ((basis[past] - basis[i]) / C.STATE_SCALE_BASIS) ** 2
+    return np.sqrt(total)
 
 
 def _weighted_stats(values: np.ndarray, weights: np.ndarray,
@@ -130,12 +140,17 @@ def evaluate(spreads: pd.DataFrame,
              back_dte_tolerance: int = C.BACK_DTE_TOLERANCE,
              min_comparables: int = C.MIN_COMPARABLES,
              z_entry: float = C.Z_ENTRY,
-             use_term_structure_filter: bool = True) -> pd.DataFrame:
+             use_term_structure_filter: bool = True,
+             use_basis: bool = C.USE_BASIS_IN_STATE) -> pd.DataFrame:
     """Attach a fair-value verdict to every row of the daily spread series.
 
     `method` is "knn" - nearest neighbours in scaled state space, capped by
     distance - or "bucket", the fixed-tolerance rule kept as the comparison
     baseline.
+
+    `use_basis` adds the forward gap between the two legs to the state. It is a
+    switch rather than a fixed choice so the claim that it helps can be tested
+    against the version without it.
     """
     out = []
     spreads = spreads.sort_values("date").reset_index(drop=True)
@@ -147,6 +162,8 @@ def evaluate(spreads: pd.DataFrame,
         back_dte = book["back_dte"].to_numpy()
         iv = book["front_iv"].to_numpy()
         dates = book["date"].to_numpy()
+        basis = (book["basis"].to_numpy()
+                 if use_basis and "basis" in book.columns else None)
 
         for i in range(len(book)):
             row = book.iloc[i].to_dict()
@@ -159,7 +176,7 @@ def evaluate(spreads: pd.DataFrame,
                 if past.size == 0:
                     out.append({**row, **_blank(0)})
                     continue
-                dist = _state_distance(front_dte, back_dte, iv, i, past)
+                dist = _state_distance(front_dte, back_dte, iv, i, past, basis)
                 within = dist <= max_distance
                 idx, dist = past[within], dist[within]
                 if idx.size > k:                 # keep the k closest

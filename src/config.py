@@ -83,6 +83,14 @@ KNN_K = 15
 STATE_SCALE_FRONT_DTE = 1.0
 STATE_SCALE_BACK_DTE = 3.0
 STATE_SCALE_IV = 0.5
+# The gap between the two legs' forwards. Calibrated so one unit moves the debit
+# about as much as one day on the front leg does: measured across the sample, a
+# front-leg day is worth ~10.4 points of debit and a basis point ~0.37, so ~28
+# points of basis is the equivalent step. Rounded to 30.
+STATE_SCALE_BASIS = 30.0
+# Whether the basis is part of the state at all. Kept as a switch so the claim
+# that it belongs there can be measured rather than asserted.
+USE_BASIS_IN_STATE = True
 # Beyond this distance a historical day is not the same trade, and is dropped
 # even if that leaves too few neighbours to speak. Without the cap, kNN always
 # returns an answer - including on days whose nearest neighbour is nothing like

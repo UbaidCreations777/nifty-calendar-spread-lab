@@ -405,3 +405,58 @@ def test_evaluate_one_also_reports_the_raw_signal():
     one = fv.evaluate_one(spreads, "CE", spreads["date"].max(),
                           front_dte=4, back_dte=11, min_comparables=8)
     assert one["raw_signal"] == fv.SELL
+
+
+# ------------------------------------------------------------------- basis
+
+def test_basis_separates_days_that_otherwise_look_identical():
+    """Two legs are priced off two different forwards, and the gap between them
+    moves the debit on its own. A day that agrees on vol and on both expiries but
+    not on the basis is pricing a different trade, and must not be treated as a
+    comparable."""
+    history = [97.0, 103.0, 99.0, 101.0, 96.0, 104.0, 98.0, 102.0]
+    rows = [make_pair_row(d, 4, 11, date(2024, 1, 1) + timedelta(days=i))
+            for i, d in enumerate(history)]
+    today = date(2024, 1, 20)
+    rows.append(make_pair_row(70.0, 4, 11, today))
+    spreads = pd.DataFrame(rows)
+
+    # History sat at one basis; today is far away from it.
+    spreads["basis"] = 80.0
+    spreads.loc[spreads["date"] == today, "basis"] = 400.0
+
+    ignored = fv.evaluate(spreads, min_comparables=8, use_basis=False)
+    counted = fv.evaluate(spreads, min_comparables=8, use_basis=True)
+
+    assert ignored.iloc[-1]["n_comparables"] == 8      # basis invisible
+    assert counted.iloc[-1]["signal"] == fv.INSUFFICIENT
+    assert counted.iloc[-1]["n_comparables"] < 8       # too far in state space
+
+
+def test_matching_basis_still_counts_as_comparable():
+    """The dimension must only exclude days that genuinely differ."""
+    history = [97.0, 103.0, 99.0, 101.0, 96.0, 104.0, 98.0, 102.0]
+    rows = [make_pair_row(d, 4, 11, date(2024, 1, 1) + timedelta(days=i))
+            for i, d in enumerate(history)]
+    today = date(2024, 1, 20)
+    rows.append(make_pair_row(70.0, 4, 11, today))
+    spreads = pd.DataFrame(rows)
+    spreads["basis"] = 80.0                            # same basis throughout
+
+    out = fv.evaluate(spreads, min_comparables=8, use_basis=True)
+    assert out.iloc[-1]["n_comparables"] == 8
+    assert out.iloc[-1]["signal"] == fv.BUY
+
+
+def test_basis_column_absent_is_not_an_error():
+    """Older cached spread files predate the column; the model should fall back
+    rather than crash on them."""
+    history = [97.0, 103.0, 99.0, 101.0, 96.0, 104.0, 98.0, 102.0]
+    rows = [make_pair_row(d, 4, 11, date(2024, 1, 1) + timedelta(days=i))
+            for i, d in enumerate(history)]
+    rows.append(make_pair_row(70.0, 4, 11, date(2024, 1, 20)))
+    spreads = pd.DataFrame(rows)
+    assert "basis" not in spreads.columns
+
+    out = fv.evaluate(spreads, min_comparables=8, use_basis=True)
+    assert out.iloc[-1]["n_comparables"] == 8
